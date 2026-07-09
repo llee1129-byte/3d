@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D 도시 환경</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #87c8ff;
+      font-family: Arial, sans-serif;
+    }
+    canvas { display: block; }
+    .ui {
+      position: fixed;
+      left: 12px;
+      top: 12px;
+      color: white;
+      background: rgba(0,0,0,0.45);
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 14px;
+      line-height: 1.5;
+      user-select: none;
+      z-index: 10;
+      max-width: 420px;
+    }
+    .hint { margin-top: 6px; color: #d7f7ff; font-size: 13px; }
+    .crosshair {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: 10px;
+      height: 10px;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 10;
+    }
+    .crosshair::before, .crosshair::after {
+      content: "";
+      position: absolute;
+      background: rgba(255,255,255,0.95);
+      border-radius: 2px;
+    }
+    .crosshair::before { left: 4px; top: 0; width: 2px; height: 10px; }
+    .crosshair::after { top: 4px; left: 0; width: 10px; height: 2px; }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.15);
+      color: white;
+      font-size: 20px;
+      z-index: 20;
+      pointer-events: none;
+      text-align: center;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="ui">
+    <div><b>3D 도시 환경</b></div>
+    <div>이동: W A S D</div>
+    <div>시점 회전: 마우스 드래그</div>
+    <div>창문이 건물 벽면에 붙도록 수정</div>
+    <div class="hint">창문이 벽에서 뜨지 않도록 깊이와 위치를 다시 맞췄습니다.</div>
+  </div>
+  <div class="crosshair"></div>
+  <div class="overlay" id="overlay">화면을 클릭한 뒤 마우스를 움직여 시점을 돌리고<br>WASD로 이동하세요</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    let scene, camera, renderer;
+    let keys = {};
+    let yaw = 0, pitch = 0;
+    let isDragging = false, lastMouseX = 0, lastMouseY = 0;
+    const clock = new THREE.Clock();
+    const player = { position: new THREE.Vector3(0, 2, 18) };
+
+    init();
+    animate();
+
+    function init() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87c8ff);
+      scene.fog = new THREE.Fog(0x87c8ff, 35, 320);
+
+      camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
+      camera.position.copy(player.position);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      document.body.appendChild(renderer.domElement);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.72));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.25);
+      sun.position.set(50, 90, 35);
+      scene.add(sun);
+
+      createGround();
+      createBuildings();
+      createRoadAsSidewalk();
+      createRampPair();
+      createTrafficLight();
+      createBusAfterRamp();
+      createTreesAndStreetLights();
+
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+      window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+      window.addEventListener('mousedown', onMouseDown);
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', () => isDragging = false);
+      window.addEventListener('click', () => document.getElementById('overlay').style.display = 'none');
+    }
+
+    function createGround() {
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(600, 600),
+        new THREE.MeshStandardMaterial({ color: 0x77b36d })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+    }
+
+    function createBuildings() {
+      const windowMat = new THREE.MeshStandardMaterial({ color: 0xaad7ff, transparent: true, opacity: 0.9 });
+      const wallMatBase = () => new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(Math.random(), 0.18, 0.45) });
+
+      for (let i = -6; i <= 6; i++) {
+        for (let j = -6; j <= 6; j++) {
+          const px = i * 22;
+          const pz = j * 22;
+          const distRamp = Math.hypot(px, pz - 34);
+          if (distRamp < 40) continue;
+          if (Math.abs(px) < 18 && Math.abs(pz) < 18) continue;
+          if (Math.abs(px) < 14 && pz > 8 && pz < 70) continue;
+          if (Math.min(Math.abs(px), Math.abs(pz)) < 12) continue;
+          const h = 6 + Math.random() * 26;
+          const w = 7 + Math.random() * 8;
+          const d = 7 + Math.random() * 8;
+          const building = new THREE.Group();
+          const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMatBase());
+          wall.castShadow = true;
+          wall.receiveShadow = true;
+          building.add(wall);
+
+          const frontWinCols = Math.max(2, Math.floor(w / 1.8));
+          const frontWinRows = Math.max(2, Math.floor(h / 2.7));
+          for (let yy = -frontWinRows; yy <= frontWinRows; yy++) {
+            for (let xx = -frontWinCols; xx <= frontWinCols; xx++) {
+              const wx = (xx / (frontWinCols + 1)) * (w * 0.78);
+              const wy = (yy / (frontWinRows + 1)) * (h * 0.82);
+              const frontWin = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.02), windowMat);
+              frontWin.position.set(wx, wy, d / 2 + 0.01);
+              building.add(frontWin);
+
+              const backWin = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.02), windowMat);
+              backWin.position.set(wx, wy, -d / 2 - 0.01);
+              building.add(backWin);
+            }
+          }
+
+          const sideWinRows = Math.max(2, Math.floor(h / 2.7));
+          const sideWinCols = Math.max(2, Math.floor(d / 1.8));
+          for (let yy = -sideWinRows; yy <= sideWinRows; yy++) {
+            for (let zz = -sideWinCols; zz <= sideWinCols; zz++) {
+              const wz = (zz / (sideWinCols + 1)) * (d * 0.78);
+              const wy = (yy / (sideWinRows + 1)) * (h * 0.82);
+              const leftWin = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.9, 0.9), windowMat);
+              leftWin.position.set(w / 2 + 0.01, wy, wz);
+              building.add(leftWin);
+
+              const rightWin = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.9, 0.9), windowMat);
+              rightWin.position.set(-w / 2 - 0.01, wy, wz);
+              building.add(rightWin);
+            }
+          }
+
+          building.position.set(px, h / 2, pz);
+          scene.add(building);
+        }
+      }
+    }
+
+    function createRoadAsSidewalk() {
+      const sidewalk = new THREE.MeshStandardMaterial({ color: 0xb7b7b7, roughness: 1 });
+      const road1 = new THREE.Mesh(new THREE.BoxGeometry(600, 0.25, 12), sidewalk);
+      road1.position.set(0, 0.12, 0);
+      scene.add(road1);
+      const road2 = new THREE.Mesh(new THREE.BoxGeometry(12, 0.25, 600), sidewalk);
+      road2.position.set(0, 0.12, 0);
+      scene.add(road2);
+    }
+
+    function createRampPair() {
+      const rampMat = new THREE.MeshStandardMaterial({ color: 0x3f3f3f, roughness: 1 });
+      const railMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+      const length = 22, rise = 2.2, width = 10;
+      const angle = Math.atan(rise / length);
+      const startZ = 12, midZ = 34, endZ = 56;
+
+      const upRamp = new THREE.Mesh(new THREE.BoxGeometry(width, 0.7, length), rampMat);
+      upRamp.position.set(0, 0.35 + rise / 2, (startZ + midZ) / 2);
+      upRamp.rotation.x = -angle;
+      scene.add(upRamp);
+
+      const topPlatform = new THREE.Mesh(new THREE.BoxGeometry(width + 2, 0.25, 6), rampMat);
+      topPlatform.position.set(0, 2.12, midZ + 3);
+      scene.add(topPlatform);
+
+      const downRamp = new THREE.Mesh(new THREE.BoxGeometry(width, 0.7, length), rampMat);
+      downRamp.position.set(0, 0.35 + rise / 2, (midZ + endZ) / 2);
+      downRamp.rotation.x = angle;
+      scene.add(downRamp);
+
+      const rail1 = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, length * 2 + 8, 10), railMat);
+      rail1.rotation.z = Math.PI / 2;
+      rail1.position.set(-4.7, 1.3, (startZ + endZ) / 2);
+      scene.add(rail1);
+
+      const rail2 = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, length * 2 + 8, 10), railMat);
+      rail2.rotation.z = Math.PI / 2;
+      rail2.position.set(4.7, 1.3, (startZ + endZ) / 2);
+      scene.add(rail2);
+    }
+
+    function createTrafficLight() {
+      const poleMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+      const boxMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 8, 12), poleMat);
+      pole.position.set(10, 4, 9);
+      scene.add(pole);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(6, 0.25, 0.25), poleMat);
+      arm.position.set(12.4, 7.5, 9);
+      scene.add(arm);
+      const lightBox = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.6, 1.1), boxMat);
+      lightBox.position.set(15.1, 6.1, 9);
+      scene.add(lightBox);
+    }
+
+    function createBusAfterRamp() {
+      const bus = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 4), new THREE.MeshStandardMaterial({ color: 0xffb000 }));
+      body.position.y = 1.5;
+      bus.add(body);
+      const doorLeft = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2, 1), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+      doorLeft.position.set(5.06, 0.5, 0.55);
+      doorLeft.rotation.y = -1.0;
+      bus.add(doorLeft);
+      const doorRight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2, 1), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+      doorRight.position.set(5.06, 0.5, -0.55);
+      doorRight.rotation.y = 1.0;
+      bus.add(doorRight);
+      bus.position.set(0, 0.3, 94);
+      bus.rotation.y = Math.PI;
+      scene.add(bus);
+    }
+
+    function createTreesAndStreetLights() {
+      const trunkMat = new THREE.MeshStandardMaterial({ color: 0x7a4a21 });
+      const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f7d32 });
+      const lampPoleMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+      const lampHeadMat = new THREE.MeshStandardMaterial({ color: 0xddddaa, emissive: 0x111100 });
+      const positions = [
+        [-18, -8], [18, -8], [-18, 24], [18, 24],
+        [-24, 48], [24, 48], [-30, 74], [30, 74],
+        [-36, 100], [36, 100], [-40, 126], [40, 126]
+      ];
+      positions.forEach(([x, z], idx) => {
+        const tree = new THREE.Group();
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 4, 8), trunkMat);
+        trunk.position.y = 2;
+        tree.add(trunk);
+        const leaves = new THREE.Mesh(new THREE.SphereGeometry(1.8 + (idx % 3) * 0.15, 10, 10), leafMat);
+        leaves.position.y = 4.8;
+        tree.add(leaves);
+        tree.position.set(x, 0, z);
+        scene.add(tree);
+
+        const lamp = new THREE.Group();
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 5.5, 10), lampPoleMat);
+        pole.position.y = 2.75;
+        lamp.add(pole);
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.35, 0.7), lampHeadMat);
+        head.position.set(0, 5.15, 0);
+        lamp.add(head);
+        lamp.position.set(-x, 0, z + 6);
+        scene.add(lamp);
+      });
+    }
+
+    function onMouseDown(e) { isDragging = true; lastMouseX = e.clientX; lastMouseY = e.clientY; }
+    function onMouseMove(e) {
+      if (!isDragging) return;
+      const dx = e.clientX - lastMouseX, dy = e.clientY - lastMouseY;
+      lastMouseX = e.clientX; lastMouseY = e.clientY;
+      yaw -= dx * 0.003;
+      pitch -= dy * 0.003;
+      pitch = Math.max(-1.2, Math.min(1.2, pitch));
+    }
+
+    function getGroundY(x, z) {
+      const startZ = 12, midZ = 34, endZ = 56;
+      if (Math.abs(x) < 4.5 && z >= startZ && z < midZ) return 2 + ((z - startZ) / (midZ - startZ)) * 2.2;
+      if (Math.abs(x) < 4.5 && z >= midZ && z <= endZ) return 4.2 - ((z - midZ) / (endZ - midZ)) * 2.2;
+      return 2;
+    }
+
+    function updatePlayer(delta) {
+      const speed = 10;
+      const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+      const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+      if (keys['w']) player.position.addScaledVector(forward, delta * speed);
+      if (keys['s']) player.position.addScaledVector(forward, -delta * speed);
+      if (keys['a']) player.position.addScaledVector(right, -delta * speed);
+      if (keys['d']) player.position.addScaledVector(right, delta * speed);
+      player.position.y += (getGroundY(player.position.x, player.position.z) - player.position.y) * Math.min(1, delta * 8);
+      camera.position.copy(player.position);
+      camera.rotation.order = 'YXZ';
+      camera.rotation.y = yaw;
+      camera.rotation.x = pitch;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      updatePlayer(clock.getDelta());
+      renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    }
+  </script>
+</body>
+</html>
